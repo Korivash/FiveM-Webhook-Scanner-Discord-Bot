@@ -34,7 +34,9 @@ try:
 except ImportError:
     pass
 
+
 # ============================================
+# CONFIGURATION
 # ============================================
 
 class Config:
@@ -44,6 +46,7 @@ class Config:
     qb_logs_category_id: str = os.getenv("QB_LOGS_CATEGORY_ID", "")
     fivem_path: str = os.getenv("FIVEM_RESOURCES_PATH", "")
     
+    # File scanning
     file_extensions = ['.lua', '.js', '.ts', '.json', '.cfg', '.txt', '.md', '.env', '.xml', '.yml', '.yaml', '.ini']
     skip_folders = ['node_modules', '.git', '__pycache__', 'cache', 'logs', '.idea', '.vscode', 'dist', 'build', 'target']
     webhook_patterns = [
@@ -51,10 +54,12 @@ class Config:
         r'https://discordapp\.com/api/webhooks/\d+/[\w-]+',
     ]
     
+    # API settings
     rate_limit_delay: float = 1.5
     channel_creation_delay: float = 1.5
     webhook_creation_delay: float = 1.0
     
+    # Behavior
     create_backups: bool = True
     backup_dir: str = "webhook_backups"
     output_dir: str = "webhook_output"
@@ -74,9 +79,12 @@ class Config:
             errors.append(f"FiveM path does not exist: {self.fivem_path}")
         return len(errors) == 0, errors
 
+
 config = Config()
 
+
 # ============================================
+# QB-CORE SCANNER
 # ============================================
 
 class QBCoreScanner:
@@ -86,7 +94,7 @@ class QBCoreScanner:
         self.base_path = Path(config.fivem_path).resolve()
         self.webhook_pattern = re.compile('|'.join(config.webhook_patterns))
         self.webhooks_by_resource: Dict[str, Set[str]] = defaultdict(set)
-        self.file_occurrences: Dict[str, List[tuple]] = defaultdict(list)
+        self.file_occurrences: Dict[str, List[tuple]] = defaultdict(list)  # Track file locations
     
     async def scan(self, progress_callback=None) -> Dict[str, Set[str]]:
         """Scan and return webhooks grouped by resource"""
@@ -148,7 +156,9 @@ class QBCoreScanner:
         except:
             return 'unknown'
 
+
 # ============================================
+# WEBHOOK CREATOR
 # ============================================
 
 class WebhookCreator:
@@ -171,24 +181,26 @@ class WebhookCreator:
         for idx, (resource_name, old_webhooks) in enumerate(sorted(webhooks_by_resource.items())):
             channel_name = self._sanitize_name(f"{resource_name}-logs")
             
+            # Create channel
             category = self.guild.get_channel(self.category_id)
             if not category:
                 if progress_callback:
                     await progress_callback(message=f"❌ Category not found! Check QB_LOGS_CATEGORY_ID")
                 return False
             
+            # Check if channel already exists
             existing_channel = discord.utils.get(self.guild.text_channels, name=channel_name)
             if existing_channel and existing_channel.category_id == self.category_id:
                 channel = existing_channel
                 if progress_callback:
-                    await progress_callback(message=f"♻️ Reusing
+                    await progress_callback(message=f"♻️ Reusing #{channel_name}")
             else:
                 channel = await self.guild.create_text_channel(
                     name=channel_name,
                     category=category
                 )
                 if progress_callback:
-                    await progress_callback(message=f"✅ Created
+                    await progress_callback(message=f"✅ Created #{channel_name}")
                 await asyncio.sleep(config.channel_creation_delay)
             
             self.created_channels.append({
@@ -197,6 +209,7 @@ class WebhookCreator:
                 'resource': resource_name
             })
             
+            # Create webhooks
             webhooks_created = 0
             for webhook_idx, old_url in enumerate(sorted(old_webhooks), 1):
                 webhook_name = f"{resource_name}"
@@ -209,7 +222,7 @@ class WebhookCreator:
                 await asyncio.sleep(config.webhook_creation_delay)
             
             if progress_callback:
-                await progress_callback(message=f"  └─ Created {webhooks_created} webhook(s) in
+                await progress_callback(message=f"  └─ Created {webhooks_created} webhook(s) in #{channel_name}")
         
         return True
     
@@ -222,7 +235,9 @@ class WebhookCreator:
         name = name.strip('-')
         return name[:100] or 'channel'
 
+
 # ============================================
+# FILE UPDATER
 # ============================================
 
 class FileUpdater:
@@ -234,6 +249,7 @@ class FileUpdater:
     async def update_all(self, webhook_mappings: Dict[str, str], file_occurrences: Dict[str, List[tuple]], progress_callback=None):
         """Update all files with new webhooks"""
         
+        # Create backup directory
         if config.create_backups:
             backup_dir = Path(config.backup_dir) / datetime.now().strftime('%Y%m%d_%H%M%S')
             backup_dir.mkdir(parents=True, exist_ok=True)
@@ -242,6 +258,7 @@ class FileUpdater:
         else:
             backup_dir = None
         
+        # Get unique files that need updating
         files_to_update = set()
         for old_url in webhook_mappings.keys():
             for file_path, _ in file_occurrences.get(old_url, []):
@@ -268,6 +285,7 @@ class FileUpdater:
             original = content
             replacements = 0
             
+            # Replace all old webhook URLs with new ones
             for old_url, new_url in webhook_mappings.items():
                 if old_url in content:
                     occurrences = content.count(old_url)
@@ -275,6 +293,7 @@ class FileUpdater:
                     replacements += occurrences
             
             if replacements > 0:
+                # Backup
                 if backup_dir and config.create_backups:
                     backup_file = backup_dir / file_path.name
                     backup_file.parent.mkdir(parents=True, exist_ok=True)
@@ -282,6 +301,7 @@ class FileUpdater:
                         f.write(original)
                     self.stats['files_backed_up'] += 1
                 
+                # Update
                 with open(file_path, 'w', encoding='utf-8', errors='ignore') as f:
                     f.write(content)
                 
@@ -289,9 +309,11 @@ class FileUpdater:
                 self.stats['replacements'] += replacements
         
         except Exception as e:
-            pass
+            pass  # Silently skip files that can't be updated
+
 
 # ============================================
+# RESULTS SAVER
 # ============================================
 
 class ResultsSaver:
@@ -313,10 +335,12 @@ class ResultsSaver:
             }
         }
         
+        # Save JSON
         json_path = output_dir / 'webhook_mappings.json'
         with open(json_path, 'w', encoding='utf-8') as f:
             json.dump(data, f, indent=2)
         
+        # Save text guide
         guide_path = output_dir / 'webhook_guide.txt'
         with open(guide_path, 'w', encoding='utf-8') as f:
             f.write("=" * 70 + "\n")
@@ -325,10 +349,11 @@ class ResultsSaver:
             f.write(f"Generated: {datetime.now().strftime('%Y-%m-%d %H:%M:%S')}\n\n")
             
             for channel in channels:
-                f.write(f"\nChannel:
+                f.write(f"\nChannel: #{channel['name']}\n")
                 f.write(f"Resource: {channel['resource']}\n")
                 f.write(f"{'-' * 70}\n")
                 
+                # Find webhooks for this resource
                 for old_url, new_url in webhook_mappings.items():
                     f.write(f"Old: {old_url}\n")
                     f.write(f"New: {new_url}\n\n")
@@ -336,7 +361,9 @@ class ResultsSaver:
         if progress_callback:
             await progress_callback(message=f"💾 Saved results to {output_dir}/")
 
+
 # ============================================
+# DISCORD BOT
 # ============================================
 
 class QBWebhookBot(discord.Client):
@@ -367,15 +394,19 @@ class QBWebhookBot(discord.Client):
         print(f"🎯 Use /scan-webhooks in Discord to start!")
         print(f"{'=' * 70}\n")
 
+
 bot = QBWebhookBot()
 
+
 # ============================================
+# SLASH COMMANDS
 # ============================================
 
 @bot.tree.command(name="scan-webhooks", description="Scan QB-Core resources and create webhooks")
 async def scan_webhooks(interaction: discord.Interaction):
     """Slash command to scan and create webhooks"""
     
+    # Defer response (this can take a while)
     await interaction.response.defer(ephemeral=False)
     
     async def update_progress(message: str = None, embed: discord.Embed = None):
@@ -389,6 +420,7 @@ async def scan_webhooks(interaction: discord.Interaction):
             pass
     
     try:
+        # Step 1: Scan
         await update_progress(message="🔍 **STEP 1/4: Scanning QB-Core Resources**")
         scanner = QBCoreScanner()
         webhooks_by_resource = await scanner.scan(update_progress)
@@ -397,6 +429,7 @@ async def scan_webhooks(interaction: discord.Interaction):
             await update_progress(message="❌ No webhooks found in QB-Core resources!")
             return
         
+        # Step 2: Create channels and webhooks
         await update_progress(message="\n🔨 **STEP 2/4: Creating Channels & Webhooks**")
         creator = WebhookCreator(interaction.guild, config.qb_logs_category_id)
         success = await creator.create_all(webhooks_by_resource, update_progress)
@@ -405,13 +438,16 @@ async def scan_webhooks(interaction: discord.Interaction):
             await update_progress(message="❌ Failed to create channels/webhooks!")
             return
         
+        # Step 3: Update files
         await update_progress(message="\n📝 **STEP 3/4: Updating Files**")
         updater = FileUpdater()
         await updater.update_all(creator.webhook_mappings, scanner.file_occurrences, update_progress)
         
+        # Step 4: Save results
         await update_progress(message="\n💾 **STEP 4/4: Saving Results**")
         await ResultsSaver.save(creator.webhook_mappings, creator.created_channels, update_progress)
         
+        # Final summary
         embed = discord.Embed(
             title="✅ QB-Core Webhook Setup Complete!",
             description="All webhooks have been created and files updated.",
@@ -452,6 +488,7 @@ async def scan_webhooks(interaction: discord.Interaction):
         import traceback
         print(traceback.format_exc())
 
+
 @bot.tree.command(name="webhook-status", description="Check webhook bot status")
 async def webhook_status(interaction: discord.Interaction):
     """Check bot status"""
@@ -462,6 +499,7 @@ async def webhook_status(interaction: discord.Interaction):
         timestamp=datetime.now()
     )
     
+    # Check category
     category = interaction.guild.get_channel(int(config.qb_logs_category_id))
     category_status = "✅ Found" if category else "❌ Not Found"
     
@@ -475,6 +513,7 @@ async def webhook_status(interaction: discord.Interaction):
         inline=False
     )
     
+    # Count existing channels in category
     if category:
         channels_in_category = len(category.channels)
         embed.add_field(
@@ -493,7 +532,9 @@ async def webhook_status(interaction: discord.Interaction):
     
     await interaction.response.send_message(embed=embed, ephemeral=True)
 
+
 # ============================================
+# MAIN
 # ============================================
 
 def main():
@@ -501,6 +542,7 @@ def main():
     
     print("\n🚀 Starting QB-Core Webhook Bot...\n")
     
+    # Validate config
     valid, errors = config.validate()
     if not valid:
         print("❌ Configuration Error!\n")
@@ -514,6 +556,7 @@ def main():
         print()
         return 1
     
+    # Run bot
     try:
         bot.run(config.bot_token)
     except KeyboardInterrupt:
@@ -524,6 +567,7 @@ def main():
         import traceback
         traceback.print_exc()
         return 1
+
 
 if __name__ == "__main__":
     sys.exit(main())
