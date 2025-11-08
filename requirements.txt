@@ -1,0 +1,6 @@
+# Required dependencies
+aiohttp>=3.9.0
+
+# Optional but recommended
+python-dotenv>=1.0.0
+tqdm>=4.66.0
